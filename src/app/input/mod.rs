@@ -52,8 +52,7 @@ pub(crate) use self::{
     lease::{ConsumedInputLease, ForwardedInputLease, InputLeaseKey, InputLeaseTable, RepeatPlan},
     modal::{
         handle_global_menu_key, handle_keybind_help_key, handle_navigator_key,
-        insert_keybind_help_query_text, insert_navigator_search_text, insert_rename_input_text,
-        open_new_workspace_dialog,
+        insert_keybind_help_query_text, insert_navigator_search_text, open_new_workspace_dialog,
     },
     navigate::{
         terminal_direct_indexed_navigation_action, terminal_direct_non_indexed_navigation_action,
@@ -210,7 +209,7 @@ impl App {
     pub(crate) fn paste_into_active_text_input(&mut self, text: &str) -> bool {
         match self.state.mode {
             Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane => {
-                insert_rename_input_text(&mut self.state, text);
+                self.state.name_input.insert_str(text);
                 true
             }
             Mode::NewLinkedWorktree => {
@@ -916,12 +915,17 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::RenameTab;
         app.state.name_input = "2".into();
-        app.state.name_input_replace_on_type = true;
+        app.state.name_input.replace_on_type = true;
 
         app.handle_paste("feature/logs".into()).await;
 
         assert_eq!(app.state.name_input, "feature/logs");
-        assert!(!app.state.name_input_replace_on_type);
+        assert!(!app.state.name_input.replace_on_type);
+
+        app.handle_rename_key_via_api(KeyEvent::new(KeyCode::Home, KeyModifiers::empty()));
+        app.handle_paste("infra/".into()).await;
+
+        assert_eq!(app.state.name_input, "infra/feature/logs");
     }
 
     #[tokio::test]
@@ -944,7 +948,7 @@ mod tests {
         let mut app = test_app();
         app.state.mode = Mode::NewLinkedWorktree;
         app.state.name_input = "generated-branch".into();
-        app.state.name_input_replace_on_type = true;
+        app.state.name_input.replace_on_type = true;
         app.state.worktree_create = Some(crate::app::state::WorktreeCreateState {
             source_workspace_id: "source".into(),
             source_checkout_path: "/repo/herdr".into(),

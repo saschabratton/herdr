@@ -6,12 +6,16 @@ use ratatui::{
     Frame,
 };
 
-use super::text::{display_width_u16, truncate_end};
+use super::text::{display_width, display_width_u16, truncate_end};
 use super::widgets::{
     action_button_row_rects, centered_popup_rect, panel_contrast_fg, render_action_button,
     render_modal_header, render_modal_shell, render_panel_shell, ActionButtonSpec,
 };
-use crate::app::{state::WorktreeOpenState, AppState, Mode};
+use crate::app::{
+    line_editor::LineEditor,
+    state::{Palette, WorktreeOpenState},
+    AppState, Mode,
+};
 use crate::terminal::TerminalRuntimeRegistry;
 
 const NEW_LINKED_WORKTREE_POPUP_WIDTH: u16 = 68;
@@ -38,6 +42,35 @@ pub(crate) fn rename_button_rects(inner: Rect) -> (Rect, Rect, Rect) {
         3,
     );
     (rects[0], rects[1], rects[2])
+}
+
+/// Render a single-line editable input with the caret at the editor's cursor:
+/// the char under the cursor is drawn reversed, on a blank cell when the
+/// cursor sits at the end of the text. Text wider than the rect scrolls
+/// horizontally so the caret always stays visible.
+fn render_line_input(frame: &mut Frame, area: Rect, input: &LineEditor, palette: &Palette) {
+    let rect = Rect { height: 1, ..area };
+    let (before, after) = input.text().split_at(input.cursor());
+    let (at_cursor, after_cursor) = match after.chars().next() {
+        Some(ch) => after.split_at(ch.len_utf8()),
+        None => (" ", ""),
+    };
+    let caret_end = 1 + display_width(before) + display_width(at_cursor);
+    let scroll = caret_end
+        .saturating_sub(rect.width as usize)
+        .min(u16::MAX as usize) as u16;
+    let line = Line::from(vec![
+        Span::raw(format!(" {before}")),
+        Span::styled(at_cursor, Style::default().add_modifier(Modifier::REVERSED)),
+        Span::raw(after_cursor),
+    ]);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(line)
+            .style(Style::default().fg(palette.text).bg(palette.surface0))
+            .scroll((0, scroll)),
+        rect,
+    );
 }
 
 pub(super) fn render_rename_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
@@ -70,16 +103,7 @@ pub(super) fn render_rename_overlay(app: &AppState, frame: &mut Frame, area: Rec
 
     render_modal_header(frame, rows[0], title, &app.palette);
 
-    let input_rect = Rect::new(rows[2].x, rows[2].y, rows[2].width, 1);
-    frame.render_widget(Clear, input_rect);
-    frame.render_widget(
-        Paragraph::new(format!(" {}█", app.name_input)).style(
-            Style::default()
-                .fg(app.palette.text)
-                .bg(app.palette.surface0),
-        ),
-        input_rect,
-    );
+    render_line_input(frame, rows[2], &app.name_input, &app.palette);
 
     let (save_rect, clear_rect, cancel_rect) = rename_button_rects(inner);
 
@@ -266,16 +290,7 @@ pub(super) fn render_new_linked_worktree_overlay(app: &AppState, frame: &mut Fra
         Paragraph::new(" branch").style(Style::default().fg(app.palette.overlay0)),
         rows[1],
     );
-    let input_rect = Rect::new(rows[2].x, rows[2].y, rows[2].width, 1);
-    frame.render_widget(Clear, input_rect);
-    frame.render_widget(
-        Paragraph::new(format!(" {}█", app.name_input)).style(
-            Style::default()
-                .fg(app.palette.text)
-                .bg(app.palette.surface0),
-        ),
-        input_rect,
-    );
+    render_line_input(frame, rows[2], &app.name_input, &app.palette);
 
     let checkout = create.checkout_path.display().to_string();
     frame.render_widget(
@@ -767,12 +782,14 @@ pub(crate) fn confirm_close_button_rects(inner: Rect) -> (Rect, Rect) {
 #[cfg(test)]
 mod tests {
     use crate::{
-        app::{state::WorktreeCreateState, AppState},
+        app::{line_editor::LineEditor, state::WorktreeCreateState, AppState},
         workspace::Workspace,
     };
-    use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+    use ratatui::{backend::TestBackend, layout::Rect, style::Modifier, Terminal};
 
-    use super::{confirm_close_overlay_text, render_new_linked_worktree_overlay};
+    use super::{
+        confirm_close_overlay_text, render_line_input, render_new_linked_worktree_overlay,
+    };
 
     #[test]
     fn confirm_close_text_uses_live_workspace_cwd_label() {
@@ -930,6 +947,41 @@ mod tests {
             .collect::<String>();
 
         assert!(rendered.contains("fatal: a branch named 'foo' already exists"));
+    }
+
+    #[test]
+    fn line_input_scrolls_to_keep_end_caret_visible() {
+        let app = AppState::test_new();
+        let input = LineEditor::from("abcdefghijklmnopqrstuvwxyz");
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(20, 1)).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| render_line_input(frame, Rect::new(0, 0, 20, 1), &input, &app.palette))
+            .expect("line input should render");
+
+        let cells = terminal.backend().buffer().content();
+        let row: String = cells.iter().take(20).map(|cell| cell.symbol()).collect();
+        assert_eq!(row, "hijklmnopqrstuvwxyz ");
+        assert!(cells[19].modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn line_input_shows_text_start_when_cursor_moves_home() {
+        let app = AppState::test_new();
+        let mut input = LineEditor::from("abcdefghijklmnopqrstuvwxyz");
+        input.move_start();
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(20, 1)).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| render_line_input(frame, Rect::new(0, 0, 20, 1), &input, &app.palette))
+            .expect("line input should render");
+
+        let cells = terminal.backend().buffer().content();
+        let row: String = cells.iter().take(20).map(|cell| cell.symbol()).collect();
+        assert_eq!(row, " abcdefghijklmnopqrs");
+        assert!(cells[1].modifier.contains(Modifier::REVERSED));
     }
 
     #[test]

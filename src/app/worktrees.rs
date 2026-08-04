@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{
+    line_editor::LineEditOutcome,
     state::{WorktreeCreateState, WorktreeOpenEntry, WorktreeOpenState, WorktreeRemoveState},
     App, Mode,
 };
@@ -107,8 +108,7 @@ impl App {
             "opening worktree dialog"
         );
         self.state.selected = ws_idx;
-        self.state.name_input = branch.clone();
-        self.state.name_input_replace_on_type = true;
+        self.state.name_input.prefill(branch.clone(), true);
         self.state.worktree_create = Some(WorktreeCreateState {
             source_workspace_id,
             source_checkout_path,
@@ -247,28 +247,16 @@ impl App {
                 self.close_worktree_create_dialog();
             }
             KeyCode::Enter => self.submit_worktree_create_via_api(),
-            KeyCode::Backspace => {
-                if self.state.name_input_replace_on_type {
-                    self.state.name_input.clear();
-                    self.state.name_input_replace_on_type = false;
-                } else {
-                    self.state.name_input.pop();
+            _ => {
+                if self.state.name_input.apply_key(&key) == LineEditOutcome::TextChanged {
+                    self.sync_worktree_branch_from_input();
                 }
-                self.sync_worktree_branch_from_input();
             }
-            KeyCode::Char(c) => {
-                self.insert_worktree_create_text(&c.to_string());
-            }
-            _ => {}
         }
     }
 
     pub(crate) fn insert_worktree_create_text(&mut self, text: &str) {
-        if self.state.name_input_replace_on_type {
-            self.state.name_input.clear();
-            self.state.name_input_replace_on_type = false;
-        }
-        self.state.name_input.push_str(text);
+        self.state.name_input.insert_str(text);
         self.sync_worktree_branch_from_input();
     }
 
@@ -479,7 +467,6 @@ impl App {
     fn close_worktree_create_dialog(&mut self) {
         self.state.worktree_create = None;
         self.state.name_input.clear();
-        self.state.name_input_replace_on_type = false;
         self.state.mode = if self.state.active.is_some() {
             Mode::Terminal
         } else {
@@ -491,7 +478,7 @@ impl App {
         let Some(create) = &mut self.state.worktree_create else {
             return;
         };
-        create.branch = self.state.name_input.clone();
+        create.branch = self.state.name_input.text().to_string();
         create.checkout_path = crate::worktree::default_checkout_path(
             &self.state.worktree_directory,
             &create.repo_name,
@@ -516,7 +503,7 @@ impl App {
         }
 
         create.branch = branch.clone();
-        self.state.name_input = branch.clone();
+        self.state.name_input.set_text(branch.clone());
         create.checkout_path = crate::worktree::default_checkout_path(
             &self.state.worktree_directory,
             &create.repo_name,
@@ -578,7 +565,7 @@ impl App {
         }
 
         create.branch = branch.clone();
-        self.state.name_input = branch.clone();
+        self.state.name_input.set_text(branch.clone());
         create.checkout_path = crate::worktree::default_checkout_path(
             &self.state.worktree_directory,
             &create.repo_name,
@@ -801,7 +788,6 @@ impl App {
                 let source_repo_root = create.source_repo_root.clone();
                 self.state.worktree_create = None;
                 self.state.name_input.clear();
-                self.state.name_input_replace_on_type = false;
                 let source_membership = source_existing_membership.unwrap_or(
                     crate::workspace::WorktreeSpaceMembership {
                         key: repo_key.clone(),
@@ -1136,7 +1122,7 @@ mod tests {
     fn worktree_create_replaces_prefilled_branch_on_paste_and_syncs_state() {
         let mut app = app_for_worktree_tests();
         app.state.name_input = "generated-branch".into();
-        app.state.name_input_replace_on_type = true;
+        app.state.name_input.replace_on_type = true;
         app.state.worktree_create = Some(WorktreeCreateState {
             source_workspace_id: "source".into(),
             source_checkout_path: "/repo/herdr".into(),
@@ -1153,7 +1139,7 @@ mod tests {
         app.insert_worktree_create_text("feature/linear-302");
 
         assert_eq!(app.state.name_input, "feature/linear-302");
-        assert!(!app.state.name_input_replace_on_type);
+        assert!(!app.state.name_input.replace_on_type);
         assert_eq!(
             app.state
                 .worktree_create
@@ -1161,6 +1147,46 @@ mod tests {
                 .map(|create| create.branch.as_str()),
             Some("feature/linear-302")
         );
+    }
+
+    #[test]
+    fn worktree_create_cursor_editing_updates_branch() {
+        let mut app = app_for_worktree_tests();
+        app.state.name_input = "branch".into();
+        app.state.worktree_create = Some(WorktreeCreateState {
+            source_workspace_id: "source".into(),
+            source_checkout_path: "/repo/herdr".into(),
+            source_existing_membership: None,
+            source_repo_root: "/repo/herdr".into(),
+            repo_key: "repo-key".into(),
+            repo_name: "herdr".into(),
+            branch: "branch".into(),
+            checkout_path: "/repo/herdr-branch".into(),
+            error: None,
+            creating: false,
+        });
+
+        // Pure cursor movement must not resync (the stale error stays).
+        app.state.worktree_create.as_mut().unwrap().error = Some("stale".into());
+        app.handle_worktree_create_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(
+            app.state
+                .worktree_create
+                .as_ref()
+                .and_then(|create| create.error.as_deref()),
+            Some("stale")
+        );
+
+        // Typing at the moved cursor edits in place and resyncs the branch.
+        app.handle_worktree_create_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty()));
+        assert_eq!(app.state.name_input, "xbranch");
+        let create = app.state.worktree_create.as_ref().unwrap();
+        assert_eq!(create.branch, "xbranch");
+        assert!(create.error.is_none());
+
+        // Ctrl-modified chars are shortcuts, not text input.
+        app.handle_worktree_create_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(app.state.name_input, "xbranch");
     }
 
     #[test]
