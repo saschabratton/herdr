@@ -10,6 +10,8 @@ use crate::detect::AgentState;
 use crate::layout::{PaneId, PaneInfo, SplitBorder};
 use crate::selection::Selection;
 
+use super::line_editor::LineEditor;
+
 pub(crate) type InstalledPluginRegistry =
     std::collections::HashMap<String, crate::api::schema::InstalledPluginInfo>;
 
@@ -1455,8 +1457,7 @@ pub struct AppState {
     pub worktree_directory: std::path::PathBuf,
     pub collapsed_space_keys: std::collections::HashSet<String>,
     pub request_complete_onboarding: bool,
-    pub name_input: String,
-    pub name_input_replace_on_type: bool,
+    pub name_input: LineEditor,
     pub release_notes: Option<ReleaseNotesState>,
     pub product_announcement: Option<ProductAnnouncementState>,
     pub keybind_help: KeybindHelpState,
@@ -1818,8 +1819,7 @@ impl AppState {
             worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
             collapsed_space_keys: std::collections::HashSet::new(),
             request_complete_onboarding: false,
-            name_input: String::new(),
-            name_input_replace_on_type: false,
+            name_input: LineEditor::default(),
             release_notes: None,
             product_announcement: None,
             keybind_help: KeybindHelpState::default(),

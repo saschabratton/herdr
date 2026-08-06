@@ -276,7 +276,6 @@ impl AppState {
                             {
                                 self.worktree_create = None;
                                 self.name_input.clear();
-                                self.name_input_replace_on_type = false;
                                 leave_modal(self);
                             }
                             _ => {}
@@ -3830,7 +3829,7 @@ mod tests {
 
         assert_eq!(app.state.mode, Mode::RenameWorkspace);
         assert!(app.state.pending_workspace_create_cwd.is_some());
-        assert!(app.state.name_input_replace_on_type);
+        assert!(app.state.name_input.replace_on_type);
         assert_eq!(app.state.workspaces.len(), 1);
     }
 
@@ -3853,7 +3852,7 @@ mod tests {
 
         assert_eq!(app.state.mode, Mode::RenameWorkspace);
         assert!(app.state.pending_workspace_create_cwd.is_some());
-        assert!(app.state.name_input_replace_on_type);
+        assert!(app.state.name_input.replace_on_type);
         assert_eq!(app.state.workspaces.len(), 1);
     }
 

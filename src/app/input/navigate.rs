@@ -2093,7 +2093,7 @@ mod tests {
 
         assert_eq!(app.state.mode, Mode::RenameWorkspace);
         assert_eq!(app.state.name_input, suggested_name);
-        assert!(app.state.name_input_replace_on_type);
+        assert!(app.state.name_input.replace_on_type);
         assert_eq!(app.state.pending_workspace_create_cwd.as_ref(), Some(&cwd));
         assert_eq!(app.state.workspaces.len(), 1);
 
@@ -3472,7 +3472,7 @@ navigate_pane_down = "ctrl+j"
         assert_eq!(state.mode, Mode::RenameTab);
         assert!(state.creating_new_tab);
         assert_eq!(state.name_input, "2");
-        assert!(state.name_input_replace_on_type);
+        assert!(state.name_input.replace_on_type);
         assert!(!state.request_new_tab);
         assert_eq!(state.workspaces[0].tabs.len(), 1);
     }
